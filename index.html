@@ -1093,12 +1093,20 @@ class GameScene extends Phaser.Scene {
     // player
     if (!this.playerDead) {
       const sp = 175;
-      const ptr = this.input.activePointer;
-      const onPurgeBtn = TOUCH && ptr.worldX > W - 80 && ptr.worldY > H - 66;
-      const touching = TOUCH && ptr.isDown && !onPurgeBtn;
+      // multi-touch: the movement finger is the first held pointer that is NOT
+      // on a UI button zone, so a second finger can tap PURGE / ❚❚ mid-flight
+      let movePtr = null;
+      if (TOUCH) {
+        for (const p of this.input.manager.pointers) {
+          if (!p || !p.isDown) continue;
+          const inUI = (p.worldY > H - 66 && (p.worldX < 64 || p.worldX > W - 80)) || p.worldY > H - 26;
+          if (!inUI) { movePtr = p; break; }
+        }
+      }
+      const touching = !!movePtr;
       if (touching) {
-        const tx = Phaser.Math.Clamp(ptr.worldX, 10, W - 10);
-        const ty = Phaser.Math.Clamp(ptr.worldY - 52, 24, H - 34);
+        const tx = Phaser.Math.Clamp(movePtr.worldX, 10, W - 10);
+        const ty = Phaser.Math.Clamp(movePtr.worldY - 52, 24, H - 34);
         this.player.body.setVelocity(
           Phaser.Math.Clamp((tx - this.player.x) * 14, -260, 260),
           Phaser.Math.Clamp((ty - this.player.y) * 14, -260, 260));
@@ -1196,6 +1204,7 @@ const config = {
   backgroundColor: '#05060a',
   pixelArt: true,
   roundPixels: true,
+  input: { activePointers: 4 },   // real multi-touch: move + button taps simultaneously
   physics: { default: 'arcade', arcade: { gravity: { x: 0, y: 0 } } },
   scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
   scene: [BootScene, TitleScene, SelectScene, GameScene]
