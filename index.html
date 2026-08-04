@@ -42,13 +42,33 @@ const TOUCH = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
 const SND = { muted: false };
 // absolute silence until the player actually interacts with the game
 let USER_READY = false;
+// iOS: Web Audio obeys the ringer/silent switch unless the page's audio session
+// is promoted to "playback" — do that with the audioSession API plus a looping
+// silent <audio> element, both kicked off inside the first user gesture.
+const SILENT_SRC = 'data:audio/wav;base64,UklGRkQDAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YSADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==';
+let mediaKick = null;
+function kickMediaSession() {
+  try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) {}
+  try {
+    if (!mediaKick) {
+      mediaKick = document.createElement('audio');
+      mediaKick.loop = true;
+      mediaKick.setAttribute('playsinline', '');
+      mediaKick.src = SILENT_SRC;
+    }
+    mediaKick.play().catch(() => {});
+  } catch (e) {}
+}
 function markReady() {
-  if (USER_READY) return;
+  if (USER_READY) { kickMediaSession(); return; }
   USER_READY = true;
+  kickMediaSession();
   AC.ensure();
   BGM.resume();
 }
 window.addEventListener('pointerdown', markReady, { capture: true });
+window.addEventListener('touchend', markReady, { capture: true });
+window.addEventListener('click', markReady, { capture: true });
 window.addEventListener('keydown', markReady, { capture: true });
 function toggleMute() {
   SND.muted = !SND.muted;
@@ -126,8 +146,8 @@ const BGM = {
   resume() { if (this.cur && !this.timer) { const c = this.cur; this.cur = null; this.start(c.seq, c.bpm); } }
 };
 // silence completely when the player leaves the page/window; restore on return
-function sleepAudio() { BGM.pause(); if (AC.ctx && AC.ctx.state === 'running') AC.ctx.suspend(); }
-function wakeAudio() { if (AC.ctx && !SND.muted) AC.ctx.resume(); BGM.resume(); }
+function sleepAudio() { BGM.pause(); if (AC.ctx && AC.ctx.state === 'running') AC.ctx.suspend(); if (mediaKick) mediaKick.pause(); }
+function wakeAudio() { if (AC.ctx && !SND.muted) AC.ctx.resume(); BGM.resume(); if (USER_READY && mediaKick) mediaKick.play().catch(() => {}); }
 document.addEventListener('visibilitychange', () => { document.hidden ? sleepAudio() : wakeAudio(); });
 window.addEventListener('blur', sleepAudio);
 window.addEventListener('focus', wakeAudio);
@@ -486,6 +506,7 @@ const WINGS = {
     } }
 };
 const WING_ORDER = ['CANNON', 'WIDE', 'MULTI', 'VAN', 'SIDE', 'ANTI', 'JUMP', 'HAMMER', 'DYNA', 'FIRE', 'SS', 'AH', 'OB'];
+WING_ORDER.forEach(k => { WINGS[k].code = WINGS[k].secret ? k : k[0]; }); // letter shown on flying wing items
 const SECRET_ORDER = ['SS', 'AH', 'OB'];
 
 // ------------------------------------------------------------
@@ -601,8 +622,9 @@ class TitleScene extends Phaser.Scene {
     const t2 = mkText(this, W / 2, 160, 'W I N G S', 24, '#ffe55a');
     mkText(this, W / 2, 196, '— 直向捲軸機翼射擊・B計劃復刻 —', 11, '#9aa3b8');
     mkText(this, W / 2, 262, TOUCH ? '拖曳移動(自動射擊)  PURGE 拋翼  ❚❚ 暫停' : '方向鍵 移動  Z 射擊  X 拋翼  P 暫停', TOUCH ? 10 : 11, '#e8ecff');
-    mkText(this, W / 2, 284, '機翼可擋一次攻擊,裸機中彈即墜機', 11, '#9aa3b8');
-    mkText(this, W / 2, 306, '全 30 關・13 種機翼(含 3 種隱藏翼)', 11, '#9aa3b8');
+    mkText(this, W / 2, 284, '機翼可擋一發・裸機中彈即墜機', 11, '#9aa3b8');
+    mkText(this, W / 2, 302, '空中的機翼是隨機的,標著字母——', 11, '#9aa3b8');
+    mkText(this, W / 2, 318, '想撿?先拋掉身上那副再說', 11, '#9aa3b8');
     const press = mkText(this, W / 2, 368, TOUCH ? 'TAP  TO  START' : 'PRESS  ENTER', 16, '#ffffff');
     this.tweens.add({ targets: press, alpha: 0.15, duration: 550, yoyo: true, repeat: -1 });
     mkText(this, W / 2, 420, 'HI-SCORE  ' + String(STATE.hi).padStart(7, '0'), 12, '#ffe55a');
@@ -897,23 +919,42 @@ class GameScene extends Phaser.Scene {
     if (this.boss && this.boss.active && Phaser.Math.Distance.Between(x, y, this.boss.x, this.boss.y) < 70) this.damageBoss(3);
   }
 
-  // ---------- pods ----------
+  // ---------- flying wing items (random, faithful to the original) ----------
   spawnPod() {
     const secretLeft = SECRET_ORDER.find(k => !STATE.unlocked.includes(k));
-    const isQ = secretLeft && Math.random() < 0.18;
-    const p = this.pods.create(Phaser.Math.Between(30, W - 30), -20, isQ ? 'qpod' : 'pod');
-    p.isQ = isQ; p.setDepth(7); p.body.setVelocity(Phaser.Math.Between(-20, 20), 55);
+    const isQ = secretLeft && Math.random() < 0.15;
+    const p = this.pods.create(Phaser.Math.Between(30, W - 30), -20, isQ ? 'qpod' : 'wing');
+    p.isQ = isQ; p.setDepth(7);
+    p.body.setVelocity(Phaser.Math.Between(-18, 18), 48);
+    if (!isQ) {
+      p.wingKey = Phaser.Utils.Array.GetRandom(wingList());
+      p.setTint(WINGS[p.wingKey].color);
+      p.label = mkText(this, p.x, p.y - 11, WINGS[p.wingKey].code, 9, '#ffffff').setDepth(8);
+    }
   }
   collectPod(pod) {
     if (!pod.active || this.playerDead) return;
-    const isQ = pod.isQ; pod.destroy();
-    SFX.pick();
-    let msg = null;
-    if (isQ) {
+    if (pod.isQ) {                       // golden "?" — unlocks a secret wing for the pool
+      pod.destroy();
       const k = SECRET_ORDER.find(k2 => !STATE.unlocked.includes(k2));
-      if (k) { STATE.unlocked.push(k); SFX.secret(); msg = '★ 隱藏機翼 ' + WINGS[k].name + ' 解禁!'; }
+      SFX.pick();
+      if (k) { STATE.unlocked.push(k); SFX.secret(); this.floatText(this.player.x, this.player.y - 24, '★ ' + WINGS[k].name + ' 解禁!', '#ffe55a'); }
+      return;
     }
-    this.openWingMenu(msg);
+    if (STATE.wing !== 'NONE') {         // must fly bare to take a new wing
+      const now = this.time.now;
+      if (!this.hintCd || now > this.hintCd) {
+        this.hintCd = now + 1400;
+        this.floatText(this.player.x, this.player.y - 24, TOUCH ? '先按 PURGE 拋棄機翼!' : '先按 X 拋棄機翼!', '#ff9d3c');
+      }
+      return;                            // item keeps flying — decide fast
+    }
+    const k = pod.wingKey;
+    if (pod.label) pod.label.destroy();
+    pod.destroy();
+    STATE.wing = k; this.applyWing();
+    SFX.pick();
+    this.floatText(this.player.x, this.player.y - 24, WINGS[k].name + ' 裝備!', '#8effa0');
   }
 
   // ---------- pause ----------
@@ -933,61 +974,6 @@ class GameScene extends Phaser.Scene {
       (this.pauseUI || []).forEach(o => o.destroy()); this.pauseUI = null;
       this.invulnUntil = Math.max(this.invulnUntil, this.time.now + 400);
     }
-  }
-
-  // ---------- mid-stage wing menu ----------
-  openWingMenu(msg) {
-    if (this.frozen) return;
-    this.frozen = true; this.menuOpen = true; this.physics.pause();
-    const c = this.add.container(0, 0).setDepth(100);
-    c.add(this.add.rectangle(W / 2, H / 2, W - 36, H - 100, 0x0a0c14, 0.94).setStrokeStyle(2, 0x2f6fba));
-    c.add(mkText(this, W / 2, 74, '— 機翼換裝 —', 14, '#ffe55a'));
-    if (msg) c.add(mkText(this, W / 2, 94, msg, 10, '#8effa0'));
-    const keys = wingList();
-    let idx = Math.max(0, keys.indexOf(STATE.wing));
-    const top = 116, lh = 17, rows = [], chips = [];
-    keys.forEach((k, i) => {
-      const r = mkText(this, 64, top + i * lh, '', 11, '#9aa3b8', 0);
-      const chip = this.add.image(48, top + i * lh + 5, 'wing').setTint(WINGS[k].color).setDepth(101).setScale(0.8);
-      rows.push(r); c.add(r); c.add(chip);
-    });
-    const cur = mkText(this, 32, 0, '▶', 11, '#ffe55a', 0); c.add(cur);
-    const desc = mkText(this, W / 2, H - 76, '', 10, '#8fd3ff'); c.add(desc);
-    const hint = mkText(this, W / 2, H - 60, TOUCH ? '點選機翼,再點一次換裝' : 'Z 換裝   X 保留現裝', 9, '#555f78'); c.add(hint);
-    const refresh = () => {
-      rows.forEach((r, i) => { r.setText(WINGS[keys[i]].name + (WINGS[keys[i]].secret ? ' ★' : '') + ' 「' + WINGS[keys[i]].zh + '」'); r.setColor(i === idx ? '#ffffff' : '#9aa3b8'); });
-      cur.y = top + idx * lh;
-      desc.setText(WINGS[keys[idx]].desc);
-    };
-    refresh();
-    const onUp = () => { idx = (idx + keys.length - 1) % keys.length; SFX.select(); refresh(); };
-    const onDown = () => { idx = (idx + 1) % keys.length; SFX.select(); refresh(); };
-    const close = () => {
-      this.input.keyboard.off('keydown-UP', onUp); this.input.keyboard.off('keydown-DOWN', onDown);
-      this.input.keyboard.off('keydown-Z', onOk); this.input.keyboard.off('keydown-ENTER', onOk);
-      this.input.keyboard.off('keydown-X', onCancel);
-      c.destroy(); this.physics.resume(); this.frozen = false; this.menuOpen = false;
-      this.invulnUntil = this.time.now + 800;
-    };
-    const onOk = (ev) => { if (ev && ev.repeat) return; STATE.wing = keys[idx]; SFX.confirm(); this.applyWing(); close(); };
-    const onCancel = (ev) => { if (ev && ev.repeat) return; SFX.purge(); close(); };
-    // touch: tap a row to select, tap the selected row again to equip
-    rows.forEach((r, i) => r.setInteractive({ useHandCursor: true }).on('pointerdown', () => {
-      if (idx === i) { onOk(); return; }
-      idx = i; SFX.select(); refresh();
-    }));
-    if (TOUCH) {
-      const keepBtn = this.add.rectangle(W / 2, H - 44, 110, 22, 0x22283a, 0.9).setStrokeStyle(1, 0x9aa3b8)
-        .setInteractive({ useHandCursor: true }).on('pointerdown', () => onCancel());
-      const keepTxt = mkText(this, W / 2, H - 44, '保留現裝 ✕', 10, '#9aa3b8');
-      c.add(keepBtn); c.add(keepTxt);
-    }
-    // defer registration so the collect keypress doesn't leak in
-    this.time.delayedCall(50, () => {
-      this.input.keyboard.on('keydown-UP', onUp); this.input.keyboard.on('keydown-DOWN', onDown);
-      this.input.keyboard.on('keydown-Z', onOk); this.input.keyboard.on('keydown-ENTER', onOk);
-      this.input.keyboard.on('keydown-X', onCancel);
-    });
   }
 
   // ---------- boss ----------
@@ -1145,7 +1131,11 @@ class GameScene extends Phaser.Scene {
       if (trav > b.range || b.y < -24 || b.y > H + 24 || b.x < -24 || b.x > W + 24) b.destroy();
     });
     this.eshots.getChildren().slice().forEach(s => { if (s.active && (s.y < -20 || s.y > H + 20 || s.x < -20 || s.x > W + 20)) s.destroy(); });
-    this.pods.getChildren().slice().forEach(p => { if (p.active && p.y > H + 20) p.destroy(); });
+    this.pods.getChildren().slice().forEach(p => {
+      if (!p.active) return;
+      if (p.label) p.label.setPosition(p.x, p.y - 11);
+      if (p.y > H + 20) { if (p.label) p.label.destroy(); p.destroy(); }
+    });
 
     // enemies AI
     this.enemies.getChildren().slice().forEach(e => {
