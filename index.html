@@ -379,7 +379,7 @@ const WINGS = {
     desc: '前方 3 連快射,彈速極快。對付 BOSS 的王道。',
     fire(sc, x, y) {
       for (let i = 0; i < 3; i++)
-        sc.time.delayedCall(i * 60, () => { if (sc.player.active) sc.pshot(sc.player.x, sc.player.y - 10, 0, -460, 'shotA', { dmg: 1 }); });
+        sc.time.delayedCall(i * 60, () => { if (sc.player.active && !sc.frozen) sc.pshot(sc.player.x, sc.player.y - 10, 0, -460, 'shotA', { dmg: 1 }); });
       SFX.shoot();
     } },
 
@@ -441,7 +441,7 @@ const WINGS = {
     desc: '3 連黑球 + 2 顆環繞護盾球,擋彈撞敵。',
     fire(sc, x, y) {
       for (let i = 0; i < 3; i++)
-        sc.time.delayedCall(i * 70, () => { if (sc.player.active) sc.pshot(sc.player.x, sc.player.y - 10, 0, -320, 'shotC', { dmg: 2 }); });
+        sc.time.delayedCall(i * 70, () => { if (sc.player.active && !sc.frozen) sc.pshot(sc.player.x, sc.player.y - 10, 0, -320, 'shotC', { dmg: 2 }); });
       SFX.shoot();
     } },
 
@@ -540,7 +540,12 @@ function newRun() { STATE.score = 0; STATE.lives = 3; STATE.stage = 1; STATE.win
 
 const TXT = (size, color = '#e8ecff') => ({ fontFamily: '"Courier New",monospace', fontSize: size + 'px', color });
 function mkText(sc, x, y, str, size, color, origin = 0.5) {
-  return sc.add.text(x, y, str, TXT(size, color)).setOrigin(origin).setResolution(2).setDepth(50);
+  return sc.add.text(x, y, str, TXT(size, color)).setOrigin(origin).setResolution(4).setDepth(50);
+}
+// world stays 320x480; the canvas backing store is 2x (640x960) via camera zoom
+function setupCam(sc) {
+  sc.cameras.main.setZoom(2);
+  sc.cameras.main.centerOn(W / 2, H / 2);
 }
 function wingList() { return WING_ORDER.filter(k => !WINGS[k].secret || STATE.unlocked.includes(k)); }
 function attachMute(sc, x, y) { // clickable/tappable mute toggle + M key
@@ -589,12 +594,13 @@ class TitleScene extends Phaser.Scene {
   constructor() { super('Title'); }
   create() {
     const bm = document.getElementById('boot-msg'); if (bm) bm.remove();
+    setupCam(this);
     this.add.tileSprite(W / 2, H / 2, W, H, 'bg7');
     const t1 = mkText(this, W / 2, 118, 'B-PLAN', 44, '#8fd3ff');
     t1.setStroke('#2f6fba', 6);
     const t2 = mkText(this, W / 2, 160, 'W I N G S', 24, '#ffe55a');
     mkText(this, W / 2, 196, '— 直向捲軸機翼射擊・B計劃復刻 —', 11, '#9aa3b8');
-    mkText(this, W / 2, 262, TOUCH ? '拖曳移動(自動射擊)  PURGE 鈕拋棄機翼' : '方向鍵 移動   Z 射擊   X 拋棄機翼', TOUCH ? 11 : 12, '#e8ecff');
+    mkText(this, W / 2, 262, TOUCH ? '拖曳移動(自動射擊)  PURGE 拋翼  ❚❚ 暫停' : '方向鍵 移動  Z 射擊  X 拋翼  P 暫停', TOUCH ? 10 : 11, '#e8ecff');
     mkText(this, W / 2, 284, '機翼可擋一次攻擊,裸機中彈即墜機', 11, '#9aa3b8');
     mkText(this, W / 2, 306, '全 30 關・13 種機翼(含 3 種隱藏翼)', 11, '#9aa3b8');
     const press = mkText(this, W / 2, 368, TOUCH ? 'TAP  TO  START' : 'PRESS  ENTER', 16, '#ffffff');
@@ -619,6 +625,7 @@ class SelectScene extends Phaser.Scene {
   constructor() { super('Select'); }
   create(data) {
     this.mode = (data && data.mode) || 'start';
+    setupCam(this);
     this.add.tileSprite(W / 2, H / 2, W, H, 'bg5').setAlpha(0.6);
     mkText(this, W / 2, 30, this.mode === 'start' ? 'SELECT YOUR WING' : 'STAGE ' + STATE.stage + ' — 換裝機翼', 16, '#ffe55a');
     mkText(this, W / 2, 50, TOUCH ? '點選機翼,再點一次(或按 GO)出擊' : '↑↓ 選擇   Z / ENTER 出擊', 10, '#9aa3b8');
@@ -678,6 +685,8 @@ class GameScene extends Phaser.Scene {
   constructor() { super('Game'); }
 
   create() {
+    setupCam(this);
+    this.physics.world.setBounds(0, 0, W, H);
     const def = this.def = stageDef(STATE.stage);
     if (STATE.stage === TOTAL_STAGES) {
       this.def.dur = 14000;
@@ -714,10 +723,19 @@ class GameScene extends Phaser.Scene {
         .setInteractive().on('pointerdown', () => { if (!this.frozen && !this.playerDead) this.purgeWing(false); });
       mkText(this, W - 40, H - 46, 'PURGE', 10, '#ff9d3c').setDepth(42);
     }
+    // pause: P / ESC / on-screen button; auto-pause when the window loses focus
+    this.input.keyboard.on('keydown-P', () => this.togglePause());
+    this.input.keyboard.on('keydown-ESC', () => this.togglePause());
+    this.add.rectangle(36, H - 46, 44, 26, 0x22283a, 0.8).setStrokeStyle(1, 0x8fd3ff).setDepth(41)
+      .setInteractive().on('pointerdown', () => this.togglePause());
+    mkText(this, 36, H - 46, '❚❚', 11, '#8fd3ff').setDepth(42);
+    this.blurPause = () => { if (!this.paused && !this.frozen && this.phase !== 'over' && !this.playerDead) this.togglePause(); };
+    window.addEventListener('blur', this.blurPause);
+    this.events.once('shutdown', () => window.removeEventListener('blur', this.blurPause));
 
     // state
     this.phase = 'run'; this.elapsed = 0; this.spawnAcc = 0; this.prepAcc = 0;
-    this.frozen = false; this.playerDead = false;
+    this.frozen = false; this.playerDead = false; this.paused = false; this.menuOpen = false;
     this.invulnUntil = 0; this.nextFire = 0; this.multiPhase = 0;
     this.podFlags = [false, false]; this.preBossPod = false;
     this.boss = null; this.bossCollider = null;
@@ -898,10 +916,29 @@ class GameScene extends Phaser.Scene {
     this.openWingMenu(msg);
   }
 
+  // ---------- pause ----------
+  togglePause() {
+    if (this.phase === 'over' || this.menuOpen) return;
+    if (!this.paused) {
+      this.paused = true; this.frozen = true;
+      this.physics.pause(); this.tweens.pauseAll(); BGM.pause();
+      this.pauseUI = [
+        this.add.rectangle(W / 2, H / 2, W, H, 0x05060a, 0.62).setDepth(95),
+        mkText(this, W / 2, H / 2 - 16, '❚❚  PAUSED', 20, '#e8ecff').setDepth(96),
+        mkText(this, W / 2, H / 2 + 12, TOUCH ? '再按一次 ❚❚ 繼續' : 'P / ESC 繼續', 11, '#9aa3b8').setDepth(96)
+      ];
+    } else {
+      this.paused = false; this.frozen = false;
+      this.physics.resume(); this.tweens.resumeAll(); BGM.resume();
+      (this.pauseUI || []).forEach(o => o.destroy()); this.pauseUI = null;
+      this.invulnUntil = Math.max(this.invulnUntil, this.time.now + 400);
+    }
+  }
+
   // ---------- mid-stage wing menu ----------
   openWingMenu(msg) {
     if (this.frozen) return;
-    this.frozen = true; this.physics.pause();
+    this.frozen = true; this.menuOpen = true; this.physics.pause();
     const c = this.add.container(0, 0).setDepth(100);
     c.add(this.add.rectangle(W / 2, H / 2, W - 36, H - 100, 0x0a0c14, 0.94).setStrokeStyle(2, 0x2f6fba));
     c.add(mkText(this, W / 2, 74, '— 機翼換裝 —', 14, '#ffe55a'));
@@ -929,7 +966,7 @@ class GameScene extends Phaser.Scene {
       this.input.keyboard.off('keydown-UP', onUp); this.input.keyboard.off('keydown-DOWN', onDown);
       this.input.keyboard.off('keydown-Z', onOk); this.input.keyboard.off('keydown-ENTER', onOk);
       this.input.keyboard.off('keydown-X', onCancel);
-      c.destroy(); this.physics.resume(); this.frozen = false;
+      c.destroy(); this.physics.resume(); this.frozen = false; this.menuOpen = false;
       this.invulnUntil = this.time.now + 800;
     };
     const onOk = (ev) => { if (ev && ev.repeat) return; STATE.wing = keys[idx]; SFX.confirm(); this.applyWing(); close(); };
@@ -1165,9 +1202,10 @@ class GameScene extends Phaser.Scene {
 const config = {
   type: Phaser.AUTO,
   parent: 'game',
-  width: W, height: H,
+  width: W * 2, height: H * 2,   // 2x backing resolution; world stays 320x480 via camera zoom
   backgroundColor: '#05060a',
   pixelArt: true,
+  roundPixels: true,
   physics: { default: 'arcade', arcade: { gravity: { x: 0, y: 0 } } },
   scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
   scene: [BootScene, TitleScene, SelectScene, GameScene]
